@@ -1,17 +1,20 @@
 package main
 
 import (
+	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"gioui.org/app"
-	"gioui.org/layout"
+	"gioui.org/io/system"
 	"gioui.org/op"
 	"gioui.org/unit"
-	"gioui.org/widget"
 	"gioui.org/widget/material"
 	"github.com/catalinfl/nuisance/httpblock"
+	"github.com/catalinfl/nuisance/ui"
 	"github.com/catalinfl/nuisance/window"
 )
 
@@ -34,20 +37,19 @@ func runApp(winHandler *window.WindowHandler) {
 	}
 
 	var hwnd atomic.Uintptr
-	alwaysOnTop := true
 
 	var cleanupOnce sync.Once
 	cleanup := func() {
 		_ = b.RemoveBlockEntries()
 	}
 
-	// sigCh := make(chan os.Signal, 1)
-	// signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	// go func() {
-	// 	<-sigCh
-	// 	cleanupOnce.Do(cleanup)
-	// 	w.Perform(system.ActionClose)
-	// }()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		cleanupOnce.Do(cleanup)
+		w.Perform(system.ActionClose)
+	}()
 
 	// Find window and set always on top
 	go func() {
@@ -68,9 +70,11 @@ func runApp(winHandler *window.WindowHandler) {
 	b.AddBlockEntries()
 
 	th := material.NewTheme()
-	var toggleBtn widget.Clickable
-	var tab1Btn, tab2Btn, tab3Btn widget.Clickable
-	currentTab := 0
+	btns := ui.NewButtons()
+	state := &ui.AppState{
+		CurrentTab:  0,
+		AlwaysOnTop: true,
+	}
 	var ops op.Ops
 
 	for {
@@ -83,21 +87,23 @@ func runApp(winHandler *window.WindowHandler) {
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
 
-			if tab1Btn.Clicked(gtx) {
-				currentTab = 0
+			// Handle tab clicks
+			if btns.Tab1.Clicked(gtx) {
+				state.CurrentTab = 0
 			}
-			if tab2Btn.Clicked(gtx) {
-				currentTab = 1
+			if btns.Tab2.Clicked(gtx) {
+				state.CurrentTab = 1
 			}
-			if tab3Btn.Clicked(gtx) {
-				currentTab = 2
+			if btns.Tab3.Clicked(gtx) {
+				state.CurrentTab = 2
 			}
 
-			if toggleBtn.Clicked(gtx) {
+			// Handle toggle click
+			if btns.Toggle.Clicked(gtx) {
 				h := hwnd.Load()
 				if h != 0 {
-					alwaysOnTop = !alwaysOnTop
-					newState := alwaysOnTop
+					state.AlwaysOnTop = !state.AlwaysOnTop
+					newState := state.AlwaysOnTop
 					go func(handle uintptr, enable bool) {
 						_ = winHandler.SetAlwaysOnTop(handle, enable)
 						w.Invalidate()
@@ -105,59 +111,8 @@ func runApp(winHandler *window.WindowHandler) {
 				}
 			}
 
-			layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{}.Layout(gtx,
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							btn := material.Button(th, &tab1Btn, "Pomodoro")
-							if currentTab == 0 {
-								btn.Background = th.Palette.ContrastBg
-							}
-							return btn.Layout(gtx)
-						}),
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							btn := material.Button(th, &tab2Btn, "Clock")
-							if currentTab == 1 {
-								btn.Background = th.Palette.ContrastFg
-							}
-							return btn.Layout(gtx)
-						}),
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							btn := material.Button(th, &tab3Btn, "Settings")
-							if currentTab == 2 {
-								btn.Background = th.Palette.ContrastBg
-							}
-							return btn.Layout(gtx)
-						}),
-					)
-				}),
-
-				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-					return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-						var text string
-						switch currentTab {
-						case 0:
-							text = "Tab 1\n\nThe window stays\nalways on top!"
-							return material.H5(th, text).Layout(gtx)
-						case 1:
-							text = "Tab 2\n\nOpen other programs,\nthis one won't disappear."
-						case 2:
-							text = "Tab 3\n\nSwitch between tabs!"
-						}
-						return material.H5(th, text).Layout(gtx)
-					})
-				}),
-
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					text := "Deactivate Always On Top"
-					if !alwaysOnTop {
-						text = "Activate Always On Top"
-					}
-					return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-						return material.Button(th, &toggleBtn, text).Layout(gtx)
-					})
-				}),
-			)
+			// Render UI
+			ui.Layout(gtx, th, btns, state)
 
 			e.Frame(gtx.Ops)
 		}

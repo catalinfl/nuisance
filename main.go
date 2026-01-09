@@ -1,13 +1,9 @@
 package main
 
 import (
-	"log"
-	"os"
-	"runtime"
+	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
-	"unsafe"
 
 	"gioui.org/app"
 	"gioui.org/layout"
@@ -15,91 +11,61 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
+	"github.com/catalinfl/nuisance/httpblock"
+	"github.com/catalinfl/nuisance/window"
 )
-
-var (
-	user32           = syscall.NewLazyDLL("user32.dll")
-	procSetWindowPos = user32.NewProc("SetWindowPos")
-	procIsWindow     = user32.NewProc("IsWindow")
-	procFindWindowW  = user32.NewProc("FindWindowW")
-)
-
-const (
-	HWND_TOPMOST   = ^uintptr(0)
-	HWND_NOTOPMOST = ^uintptr(1)
-	SWP_NOMOVE     = 0x0002
-	SWP_NOSIZE     = 0x0001
-	SWP_SHOWWINDOW = 0x0040
-)
-
-func setAlwaysOnTop(hwnd uintptr, enable bool) error {
-	if hwnd == 0 {
-		return nil
-	}
-	// Ensure this syscall runs on an OS thread
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	// Verify window handle is still valid
-	is, _, _ := procIsWindow.Call(hwnd)
-	if is == 0 {
-		return nil
-	}
-
-	var pos uintptr
-	if enable {
-		pos = HWND_TOPMOST
-	} else {
-		pos = HWND_NOTOPMOST
-	}
-	r1, _, err := procSetWindowPos.Call(hwnd, pos, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
-	if r1 == 0 {
-		// err is syscall.Errno with GetLastError; can be 0 in some cases.
-		if err != syscall.Errno(0) {
-			return err
-		}
-		return os.ErrInvalid
-	}
-	return nil
-}
-
-func findWindowByTitle(title string) uintptr {
-	name, _ := syscall.UTF16PtrFromString(title)
-	hwnd, _, _ := procFindWindowW.Call(0, uintptr(unsafe.Pointer(name)))
-	return hwnd
-}
 
 func main() {
-	go runApp()
+	var handler window.WindowHandler = window.WindowHandler{}
+	go runApp(&handler)
 	app.Main()
 }
 
-func runApp() {
+func runApp(winHandler *window.WindowHandler) {
 	w := new(app.Window)
 	w.Option(
 		app.Size(unit.Dp(400), unit.Dp(300)),
 		app.Title("Always On Top"),
 	)
 
+	b := httpblock.Blocker{
+		Token: "nuisance",
+		Sites: []string{"www.facebook.com", "www.youtube.com"},
+	}
+
 	var hwnd atomic.Uintptr
 	alwaysOnTop := true
 
-	// Get HWND after short delay (avoid GetForegroundWindow; it can return the wrong window)
+	var cleanupOnce sync.Once
+	cleanup := func() {
+		_ = b.RemoveBlockEntries()
+	}
+
+	// sigCh := make(chan os.Signal, 1)
+	// signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	// go func() {
+	// 	<-sigCh
+	// 	cleanupOnce.Do(cleanup)
+	// 	w.Perform(system.ActionClose)
+	// }()
+
+	// Find window and set always on top
 	go func() {
 		time.Sleep(300 * time.Millisecond)
-		for i := 0; i < 50; i++ {
-			h := findWindowByTitle("Always On Top")
+		for range 50 {
+			h := winHandler.FindWindowByTitle("Always On Top")
 			if h != 0 {
 				hwnd.Store(h)
-				_ = setAlwaysOnTop(h, true)
-				log.Println("Window set to always on top")
+				_ = winHandler.SetAlwaysOnTop(h, true)
 				w.Invalidate()
 				return
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		log.Println("[WARN] Could not find window handle (FindWindowW)")
 	}()
+
+	b.RemoveBlockEntries()
+	b.AddBlockEntries()
 
 	th := material.NewTheme()
 	var toggleBtn widget.Clickable
@@ -111,7 +77,8 @@ func runApp() {
 		e := w.Event()
 		switch e := e.(type) {
 		case app.DestroyEvent:
-			os.Exit(0)
+			cleanupOnce.Do(cleanup)
+			return
 
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
@@ -132,10 +99,9 @@ func runApp() {
 					alwaysOnTop = !alwaysOnTop
 					newState := alwaysOnTop
 					go func(handle uintptr, enable bool) {
-						_ = setAlwaysOnTop(handle, enable)
+						_ = winHandler.SetAlwaysOnTop(handle, enable)
 						w.Invalidate()
 					}(h, newState)
-					log.Printf("Always On Top: %v\n", alwaysOnTop)
 				}
 			}
 

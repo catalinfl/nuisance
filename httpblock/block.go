@@ -72,7 +72,7 @@ func (b *Blocker) RemoveBlockEntries() error {
 		return err
 	}
 
-	marker := "# " + b.Token // WITH SPACE (same as Add)
+	marker := "# " + b.Token
 	lines := strings.Split(string(input), "\n")
 	out := make([]string, 0, len(lines))
 

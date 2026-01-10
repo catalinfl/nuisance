@@ -3,9 +3,16 @@ package ui
 import (
 	"fmt"
 	"image"
+	"image/color"
+	_ "image/jpeg"
+	_ "image/png"
+	"os"
+	"path/filepath"
 
+	"gioui.org/f32"
 	"gioui.org/layout"
 	"gioui.org/op"
+	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
@@ -13,16 +20,17 @@ import (
 )
 
 type AppState struct {
-	CurrentTab     int
-	AlwaysOnTop    bool
-	HwndValid      bool
-	BlockedSites   map[string]bool
-	PomodoroTime   string
-	PomodoroMode   string
-	WorkMinutes    int
-	BreakMinutes   int
-	CustomWebsites []string
-	WebsiteInput   string
+	CurrentTab      int
+	AlwaysOnTop     bool
+	HwndValid       bool
+	BlockedSites    map[string]bool
+	PomodoroTime    string
+	PomodoroMode    string
+	WorkMinutes     int
+	BreakMinutes    int
+	CustomWebsites  []string
+	WebsiteInput    string
+	BackgroundImage *image.Image
 }
 
 type Buttons struct {
@@ -42,7 +50,6 @@ type SettingsButtons struct {
 	BlockInstagram *widget.Clickable
 	BlockTikTok    *widget.Clickable
 	BlockWhatsapp  *widget.Clickable
-	Theme          *widget.Clickable
 	WorkInc        *widget.Clickable
 	WorkDec        *widget.Clickable
 	BreakInc       *widget.Clickable
@@ -74,7 +81,6 @@ func NewSettingsButtons() *SettingsButtons {
 		BlockInstagram: new(widget.Clickable),
 		BlockTikTok:    new(widget.Clickable),
 		BlockWhatsapp:  new(widget.Clickable),
-		Theme:          new(widget.Clickable),
 		WorkInc:        new(widget.Clickable),
 		WorkDec:        new(widget.Clickable),
 		BreakInc:       new(widget.Clickable),
@@ -88,24 +94,40 @@ func NewSettingsButtons() *SettingsButtons {
 func TabBar(gtx layout.Context, th *material.Theme, btns *Buttons, currentTab int) layout.Dimensions {
 	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			btn := material.Button(th, btns.Tab1, "Pomodoro")
-			btn.Inset = layout.UniformInset(unit.Dp(6))
-			btn.TextSize = unit.Sp(11)
-			if currentTab == 0 {
-				btn.Background = th.Palette.ContrastBg
-			}
-			return btn.Layout(gtx)
+			return CustomTabButton(gtx, th, btns.Tab1, "Pomodoro", currentTab == 0)
 		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			btn := material.Button(th, btns.Tab2, "Settings")
-			btn.Inset = layout.UniformInset(unit.Dp(6))
-			btn.TextSize = unit.Sp(11)
-			if currentTab == 1 {
-				btn.Background = th.Palette.ContrastBg
-			}
-			return btn.Layout(gtx)
+			return CustomTabButton(gtx, th, btns.Tab2, "Settings", currentTab == 1)
 		}),
 	)
+}
+
+func CustomTabButton(gtx layout.Context, th *material.Theme, btn *widget.Clickable, text string, active bool) layout.Dimensions {
+	return material.Clickable(gtx, btn, func(gtx layout.Context) layout.Dimensions {
+		bg := th.Palette.Bg
+		if active {
+			bg = th.Palette.ContrastBg
+		}
+
+		return layout.Background{}.Layout(gtx,
+			func(gtx layout.Context) layout.Dimensions {
+				defer clip.Rect{Max: gtx.Constraints.Min}.Push(gtx.Ops).Pop()
+				paint.ColorOp{Color: bg}.Add(gtx.Ops)
+				paint.PaintOp{}.Add(gtx.Ops)
+				return layout.Dimensions{Size: gtx.Constraints.Min}
+			},
+			func(gtx layout.Context) layout.Dimensions {
+				return layout.UniformInset(unit.Dp(6)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					label := material.Body1(th, text)
+					label.TextSize = unit.Sp(11)
+					if active {
+						label.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+					}
+					return layout.Center.Layout(gtx, label.Layout)
+				})
+			},
+		)
+	})
 }
 
 func TabContent(gtx layout.Context, th *material.Theme, btns *Buttons, state *AppState, currentTab int) layout.Dimensions {
@@ -116,44 +138,76 @@ func TabContent(gtx layout.Context, th *material.Theme, btns *Buttons, state *Ap
 }
 
 func PomodoroContent(gtx layout.Context, th *material.Theme, btns *Buttons, state *AppState) layout.Dimensions {
-	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				label := material.H4(th, state.PomodoroTime)
-				return label.Layout(gtx)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				label := material.Body2(th, state.PomodoroMode)
-				return label.Layout(gtx)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+	defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
+	return layout.Stack{}.Layout(gtx,
+		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			if state.BackgroundImage != nil && *state.BackgroundImage != nil {
+				defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
+
+				img := *state.BackgroundImage
+				imgOp := paint.NewImageOp(img)
+				imgSize := (*state.BackgroundImage).Bounds().Size()
+
+				scaleX := float32(gtx.Constraints.Max.X) / float32(imgSize.X)
+				scaleY := float32(gtx.Constraints.Max.Y) / float32(imgSize.Y)
+				scale := scaleX
+				if scaleY > scale {
+					scale = scaleY
+				}
+
+				scaledWidth := float32(imgSize.X) * scale
+				scaledHeight := float32(imgSize.Y) * scale
+				offsetX := (float32(gtx.Constraints.Max.X) - scaledWidth) / 2
+				offsetY := (float32(gtx.Constraints.Max.Y) - scaledHeight) / 2
+
+				transform := f32.Affine2D{}.Scale(f32.Point{}, f32.Pt(scale, scale)).Offset(f32.Pt(offsetX, offsetY))
+				defer op.Affine(transform).Push(gtx.Ops).Pop()
+				imgOp.Add(gtx.Ops)
+				paint.PaintOp{}.Add(gtx.Ops)
+			}
+			return layout.Dimensions{Size: gtx.Constraints.Max}
+		}),
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						btn := material.Button(th, btns.PomoPlay, "Start")
-						btn.Inset = layout.UniformInset(unit.Dp(6))
-						btn.TextSize = unit.Sp(12)
-						return btn.Layout(gtx)
+						label := material.H1(th, state.PomodoroTime)
+						return label.Layout(gtx)
 					}),
-					layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						btn := material.Button(th, btns.PomoPause, "Pause")
-						btn.Inset = layout.UniformInset(unit.Dp(6))
-						btn.TextSize = unit.Sp(12)
-						return btn.Layout(gtx)
+						label := material.Body2(th, state.PomodoroMode)
+						return label.Layout(gtx)
 					}),
-					layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+					layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						btn := material.Button(th, btns.PomoReset, "Reset")
-						btn.Inset = layout.UniformInset(unit.Dp(6))
-						btn.TextSize = unit.Sp(12)
-						return btn.Layout(gtx)
+						return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								btn := material.Button(th, btns.PomoPlay, "Start")
+								btn.Inset = layout.UniformInset(unit.Dp(6))
+								btn.TextSize = unit.Sp(12)
+								return btn.Layout(gtx)
+							}),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								btn := material.Button(th, btns.PomoPause, "Pause")
+								btn.Inset = layout.UniformInset(unit.Dp(6))
+								btn.TextSize = unit.Sp(12)
+								return btn.Layout(gtx)
+							}),
+							layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								btn := material.Button(th, btns.PomoReset, "Reset")
+								btn.Inset = layout.UniformInset(unit.Dp(6))
+								btn.TextSize = unit.Sp(12)
+								return btn.Layout(gtx)
+							}),
+						)
 					}),
 				)
-			}),
-		)
-	})
+			})
+		}),
+	)
 }
 
 func SettingsContent(gtx layout.Context, th *material.Theme, mainBtns *Buttons, btns *SettingsButtons, state *AppState) layout.Dimensions {
@@ -308,14 +362,6 @@ func SettingsContent(gtx layout.Context, th *material.Theme, mainBtns *Buttons, 
 				label.TextSize = unit.Sp(14)
 				return label.Layout(gtx)
 			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				btn := material.Button(th, btns.Theme, "🎨 Toggle Theme")
-				btn.Inset = layout.UniformInset(unit.Dp(4))
-				btn.TextSize = unit.Sp(12)
-				return btn.Layout(gtx)
-			}),
-
 			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				label := material.H6(th, "Window")
@@ -369,13 +415,15 @@ func settingsButton(gtx layout.Context, th *material.Theme, btn *widget.Clickabl
 				func(gtx layout.Context) layout.Dimensions {
 					return layout.UniformInset(unit.Dp(6)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 						return layout.Flex{Alignment: layout.Middle, Spacing: layout.SpaceBetween}.Layout(gtx,
-							// Icon and name
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 									layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
 									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 										label := material.Body1(th, name)
 										label.TextSize = unit.Sp(12)
+										if isBlocked {
+											label.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+										}
 										return label.Layout(gtx)
 									}),
 								)
@@ -384,13 +432,16 @@ func settingsButton(gtx layout.Context, th *material.Theme, btn *widget.Clickabl
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								var statusText string
 								if isBlocked {
-									statusText = ""
-								} else {
 									statusText = "✓"
+								} else {
+									statusText = ""
 								}
-								label := material.Body2(th, statusText)
-								label.TextSize = unit.Sp(12)
-								return label.Layout(gtx)
+								lbl := material.Body2(th, statusText)
+								lbl.TextSize = unit.Sp(12)
+								if isBlocked {
+									lbl.Color = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+								}
+								return lbl.Layout(gtx)
 							}),
 						)
 					})
@@ -415,12 +466,10 @@ func ToggleButton(gtx layout.Context, th *material.Theme, btn *widget.Clickable,
 
 func Layout(gtx layout.Context, th *material.Theme, btns *Buttons, settingsBtns *SettingsButtons, state *AppState) layout.Dimensions {
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-		// Tab buttons
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return TabBar(gtx, th, btns, state.CurrentTab)
 		}),
 
-		// Content area
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			if state.CurrentTab == 1 {
 				return SettingsContent(gtx, th, btns, settingsBtns, state)
@@ -428,4 +477,30 @@ func Layout(gtx layout.Context, th *material.Theme, btns *Buttons, settingsBtns 
 			return TabContent(gtx, th, btns, state, state.CurrentTab)
 		}),
 	)
+}
+
+func LoadBackgroundImage() *image.Image {
+	exePath, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	exeDir := filepath.Dir(exePath)
+	imgPath := filepath.Join(exeDir, "image", "background.png")
+
+	file, err := os.Open(imgPath)
+	if err != nil {
+		imgPath = filepath.Join(exeDir, "image", "background.jpg")
+		file, err = os.Open(imgPath)
+		if err != nil {
+			return nil
+		}
+	}
+	defer file.Close()
+
+	img, _, err := image.Decode(file)
+	if err != nil {
+		return nil
+	}
+
+	return &img
 }

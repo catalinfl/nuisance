@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -62,7 +64,7 @@ func updateBlocker(b *httpblock.Blocker, state *ui.AppState) {
 func runApp(winHandler *window.WindowHandler) {
 	w := new(app.Window)
 	w.Option(
-		app.Size(unit.Dp(360), unit.Dp(240)),
+		app.Size(unit.Dp(360), unit.Dp(320)),
 		app.Title("Always On Top"),
 	)
 
@@ -84,7 +86,7 @@ func runApp(winHandler *window.WindowHandler) {
 
 	var hwnd atomic.Uintptr
 
-	// Initialize Pomodoro timer
+	// init here
 	pomoTimer := pomodoro.NewPomodoroTimer(25, 5)
 
 	var cleanupOnce sync.Once
@@ -101,11 +103,10 @@ func runApp(winHandler *window.WindowHandler) {
 		w.Perform(system.ActionClose)
 	}()
 
-	// Find window and set always on top
 	go func() {
 		time.Sleep(300 * time.Millisecond)
 		for range 50 {
-			h := winHandler.FindWindowByTitle("Always On Top")
+			h := winHandler.FindWindowByTitle("Nuisance")
 			if h != 0 {
 				hwnd.Store(h)
 				_ = winHandler.SetAlwaysOnTop(h, true)
@@ -116,30 +117,34 @@ func runApp(winHandler *window.WindowHandler) {
 		}
 	}()
 
-	// Remove any existing blocks on startup
+	// remove any existing blocks on startup
 	b.RemoveBlockEntries()
 
 	th := material.NewTheme()
+	th.Palette.ContrastBg = color.NRGBA{R: 160, G: 32, B: 240, A: 255}
 	btns := ui.NewButtons()
 	settingsBtns := ui.NewSettingsButtons()
 	state := &ui.AppState{
-		CurrentTab:     0,
-		AlwaysOnTop:    true,
-		BlockedSites:   make(map[string]bool),
-		PomodoroTime:   "25:00",
-		PomodoroMode:   "Ready",
-		WorkMinutes:    25,
-		BreakMinutes:   5,
-		CustomWebsites: []string{},
+		CurrentTab:  0,
+		AlwaysOnTop: true,
+		BlockedSites: map[string]bool{
+			"facebook":  true,
+			"youtube":   true,
+			"twitter":   true,
+			"reddit":    true,
+			"instagram": true,
+			"tiktok":    true,
+			"whatsapp":  true,
+		},
+		PomodoroTime:    "25:00",
+		PomodoroMode:    "Ready",
+		WorkMinutes:     25,
+		BreakMinutes:    5,
+		CustomWebsites:  []string{},
+		BackgroundImage: ui.LoadBackgroundImage(),
 	}
 
-	state.BlockedSites["facebook"] = true
-	state.BlockedSites["youtube"] = true
-	state.BlockedSites["twitter"] = true
-	state.BlockedSites["reddit"] = true
-	state.BlockedSites["instagram"] = true
-	state.BlockedSites["tiktok"] = true
-	state.BlockedSites["whatsapp"] = true
+	alarmPlayer := sound.NewAlarmPlayer()
 
 	var isBlocking atomic.Bool
 	isBlocking.Store(false)
@@ -157,7 +162,6 @@ func runApp(winHandler *window.WindowHandler) {
 			// check for mode changes to handle blocking
 			if currentMode != lastMode {
 				if currentMode == pomodoro.WorkMode && !isBlocking.Load() {
-					// Start work - block websites and play sound
 					isBlocking.Store(true)
 					updateBlocker(&b, state)
 					go func() {
@@ -165,19 +169,21 @@ func runApp(winHandler *window.WindowHandler) {
 						_ = b.AddBlockEntries()
 					}()
 				} else if currentMode == pomodoro.BreakMode && isBlocking.Load() {
-					// Break time - unblock and play sound
 					isBlocking.Store(false)
 					go func() {
 						sound.PlayBreakStart()
 						_ = b.RemoveBlockEntries()
 					}()
 				} else if currentMode == pomodoro.IdleMode && isBlocking.Load() {
-					// Complete - unblock and play sound
 					isBlocking.Store(false)
 					go func() {
 						sound.PlayComplete()
 						_ = b.RemoveBlockEntries()
 					}()
+				} else if currentMode == pomodoro.WorkAlarmMode {
+					alarmPlayer.PlayRepeating(sound.GetSoundPath("work_alarm.mp3"))
+				} else if currentMode == pomodoro.BreakAlarmMode {
+					alarmPlayer.PlayRepeating(sound.GetSoundPath("break_alarm.mp3"))
 				}
 				lastMode = currentMode
 			}
@@ -191,6 +197,10 @@ func runApp(winHandler *window.WindowHandler) {
 				state.PomodoroMode = "Paused"
 			case pomodoro.IdleMode:
 				state.PomodoroMode = "Ready"
+			case pomodoro.WorkAlarmMode:
+				state.PomodoroMode = "Work Complete - Press Start for Break"
+			case pomodoro.BreakAlarmMode:
+				state.PomodoroMode = "Break Complete - Press Start for Work"
 			}
 			w.Invalidate()
 		}
@@ -208,18 +218,19 @@ func runApp(winHandler *window.WindowHandler) {
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
 
-			// Handle tab clicks
 			if btns.Tab1.Clicked(gtx) {
+				sound.PlayButton()
 				state.CurrentTab = 0
-				w.Option(app.Size(unit.Dp(360), unit.Dp(240)))
+				w.Option(app.Size(unit.Dp(360), unit.Dp(320)))
 			}
 			if btns.Tab2.Clicked(gtx) {
+				sound.PlayButton()
 				state.CurrentTab = 1
 				w.Option(app.Size(unit.Dp(360), unit.Dp(700)))
 			}
 
-			// Handle toggle click
 			if btns.Toggle.Clicked(gtx) {
+				sound.PlayButton()
 				h := hwnd.Load()
 				if h != 0 {
 					state.AlwaysOnTop = !state.AlwaysOnTop
@@ -231,29 +242,42 @@ func runApp(winHandler *window.WindowHandler) {
 				}
 			}
 
-			// Handle Pomodoro button clicks
+			// handle Pomodoro button clicks
 			if btns.PomoPlay.Clicked(gtx) {
+				sound.PlayButton()
+				updateBlocker(&b, state)
 				if pomoTimer.Mode == pomodoro.PauseMode {
 					pomoTimer.Resume()
 				} else if pomoTimer.Mode == pomodoro.IdleMode {
-					// Update blocker with current settings before starting
-					updateBlocker(&b, state)
+					go func() {
+						_ = b.AddBlockEntries()
+					}()
 					pomoTimer.Start()
+				} else if pomoTimer.Mode == pomodoro.WorkAlarmMode {
+					alarmPlayer.Stop()
+					pomoTimer.StartBreak()
+				} else if pomoTimer.Mode == pomodoro.BreakAlarmMode {
+					alarmPlayer.Stop()
+					pomoTimer.Stop()
+					state.PomodoroTime = fmt.Sprintf("%02d:00", state.WorkMinutes)
+					state.PomodoroMode = "Ready"
 				}
 			}
 			if btns.PomoPause.Clicked(gtx) {
+				sound.PlayButton()
 				pomoTimer.Pause()
 			}
 			if btns.PomoReset.Clicked(gtx) {
+				sound.PlayButton()
+				alarmPlayer.Stop()
 				pomoTimer.Stop()
-				// Update blocker with current settings
 				updateBlocker(&b, state)
 				state.PomodoroTime = fmt.Sprintf("%02d:00", state.WorkMinutes)
 				state.PomodoroMode = "Ready"
 			}
 
-			// Handle settings duration adjustments
 			if settingsBtns.WorkInc.Clicked(gtx) {
+				sound.PlayButton()
 				if state.WorkMinutes < 60 {
 					state.WorkMinutes += 5
 					pomoTimer.UpdateDurations(state.WorkMinutes, state.BreakMinutes)
@@ -263,6 +287,7 @@ func runApp(winHandler *window.WindowHandler) {
 				}
 			}
 			if settingsBtns.WorkDec.Clicked(gtx) {
+				sound.PlayButton()
 				if state.WorkMinutes > 5 {
 					state.WorkMinutes -= 5
 					pomoTimer.UpdateDurations(state.WorkMinutes, state.BreakMinutes)
@@ -272,57 +297,79 @@ func runApp(winHandler *window.WindowHandler) {
 				}
 			}
 			if settingsBtns.BreakInc.Clicked(gtx) {
+				sound.PlayButton()
 				if state.BreakMinutes < 30 {
 					state.BreakMinutes += 5
 					pomoTimer.UpdateDurations(state.WorkMinutes, state.BreakMinutes)
 				}
 			}
 			if settingsBtns.BreakDec.Clicked(gtx) {
+				sound.PlayButton()
 				if state.BreakMinutes > 5 {
 					state.BreakMinutes -= 5
 					pomoTimer.UpdateDurations(state.WorkMinutes, state.BreakMinutes)
 				}
 			}
 
-			// Handle settings button clicks
 			if settingsBtns.BlockFacebook.Clicked(gtx) {
+				sound.PlayButton()
 				state.BlockedSites["facebook"] = !state.BlockedSites["facebook"]
 				updateBlocker(&b, state)
 			}
 			if settingsBtns.BlockYouTube.Clicked(gtx) {
+				sound.PlayButton()
 				state.BlockedSites["youtube"] = !state.BlockedSites["youtube"]
 				updateBlocker(&b, state)
 			}
 			if settingsBtns.BlockTwitter.Clicked(gtx) {
+				sound.PlayButton()
 				state.BlockedSites["twitter"] = !state.BlockedSites["twitter"]
 				updateBlocker(&b, state)
 			}
 			if settingsBtns.BlockReddit.Clicked(gtx) {
+				sound.PlayButton()
 				state.BlockedSites["reddit"] = !state.BlockedSites["reddit"]
 				updateBlocker(&b, state)
 			}
 			if settingsBtns.BlockInstagram.Clicked(gtx) {
+				sound.PlayButton()
 				state.BlockedSites["instagram"] = !state.BlockedSites["instagram"]
 				updateBlocker(&b, state)
 			}
 			if settingsBtns.BlockTikTok.Clicked(gtx) {
+				sound.PlayButton()
 				state.BlockedSites["tiktok"] = !state.BlockedSites["tiktok"]
 				updateBlocker(&b, state)
 			}
 			if settingsBtns.BlockWhatsapp.Clicked(gtx) {
+				sound.PlayButton()
 				state.BlockedSites["whatsapp"] = !state.BlockedSites["whatsapp"]
 				updateBlocker(&b, state)
 			}
 			if settingsBtns.AddWebsite.Clicked(gtx) {
+				sound.PlayButton()
 				website := settingsBtns.WebsiteEditor.Text()
 				if website != "" && website != "www.example.com" {
-					state.CustomWebsites = append(state.CustomWebsites, website)
-					settingsBtns.WebsiteEditor.SetText("")
-					updateBlocker(&b, state)
+					if !strings.Contains(website, ".") {
+						website = website + ".com"
+					}
+
+					isDuplicate := false
+					for _, existing := range state.CustomWebsites {
+						if existing == website {
+							isDuplicate = true
+							break
+						}
+					}
+
+					if !isDuplicate {
+						state.CustomWebsites = append(state.CustomWebsites, website)
+						settingsBtns.WebsiteEditor.SetText("")
+						updateBlocker(&b, state)
+					} else {
+						settingsBtns.WebsiteEditor.SetText("")
+					}
 				}
-			}
-			if settingsBtns.Theme.Clicked(gtx) {
-				// TODO: toggle theme
 			}
 
 			ui.Layout(gtx, th, btns, settingsBtns, state)

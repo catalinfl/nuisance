@@ -11,6 +11,8 @@ const (
 	BreakMode
 	PauseMode
 	IdleMode
+	WorkAlarmMode
+	BreakAlarmMode
 )
 
 type PomodoroTimer struct {
@@ -113,11 +115,32 @@ func (pt *PomodoroTimer) Resume() {
 
 func (pt *PomodoroTimer) switchMode() {
 	if pt.Mode == WorkMode {
-		pt.Mode = BreakMode
-		pt.Remaining = pt.BreakDuration
-	} else {
-		pt.Stop()
+		pt.Mode = WorkAlarmMode
+		pt.Remaining = 0
+		select {
+		case <-pt.quit:
+		default:
+			close(pt.quit)
+		}
+	} else if pt.Mode == BreakMode {
+		pt.Mode = BreakAlarmMode
+		pt.Remaining = 0
+		select {
+		case <-pt.quit:
+		default:
+			close(pt.quit)
+		}
 	}
+}
+
+func (pt *PomodoroTimer) StartBreak() {
+	if pt.Mode != WorkAlarmMode {
+		return
+	}
+	pt.Mode = BreakMode
+	pt.Remaining = pt.BreakDuration
+	pt.quit = make(chan struct{})
+	go pt.run()
 }
 
 func (pt *PomodoroTimer) Shutdown() {

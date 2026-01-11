@@ -65,7 +65,7 @@ func runApp(winHandler *window.WindowHandler) {
 	w := new(app.Window)
 	w.Option(
 		app.Size(unit.Dp(360), unit.Dp(320)),
-		app.Title("Always On Top"),
+		app.Title("Nuisance"),
 	)
 
 	// sites to block

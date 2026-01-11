@@ -335,7 +335,7 @@ func SettingsContent(gtx layout.Context, th *material.Theme, mainBtns *Buttons, 
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-						ed := material.Editor(th, btns.WebsiteEditor, "www.example.com")
+						ed := material.Editor(th, btns.WebsiteEditor, "example.com")
 						ed.TextSize = unit.Sp(12)
 						return ed.Layout(gtx)
 					}),

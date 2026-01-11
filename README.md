@@ -66,4 +66,5 @@ Place `sounds/` and `image/` next to `nuisance.exe` before running.
 ## Quick tips & troubleshooting
 
 - Run as administrator to block websites. It access /etc/hosts, so you it needs admin to block websites.
-- After closing /etc/hosts switch back to normal 
+- After closing /etc/hosts switch back to normal.
+- Blocking a website after start needs Reset and Start.

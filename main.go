@@ -349,7 +349,7 @@ func runApp(winHandler *window.WindowHandler) {
 			if settingsBtns.AddWebsite.Clicked(gtx) {
 				sound.PlayButton()
 				website := settingsBtns.WebsiteEditor.Text()
-				if website != "" && website != "www.example.com" {
+				if website != "" && website != "example.com" {
 					if !strings.Contains(website, ".") {
 						website = website + ".com"
 					}
